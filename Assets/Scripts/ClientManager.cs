@@ -1,7 +1,6 @@
-﻿using System;
-using System.Net;
-using System.Net.Sockets;
-using LiteNetLib;
+﻿using LiteNetLib;
+using LiteNetLib.Utils;
+using Server.Shared.Commands;
 using UnityEngine;
 
 public class ClientManager : MonoBehaviour
@@ -9,8 +8,17 @@ public class ClientManager : MonoBehaviour
     [SerializeField] private string address = "localhost";
     [SerializeField] private int port = 4242;
     [SerializeField] private string secretKey = "";
+
+    [SerializeField] private GameObject locationPrefab;
+    [SerializeField] private GameObject characterPrefab;
+    
     private EventBasedNetListener listener;
-    private NetManager netManager;
+    private NetManager netManager; 
+    
+    private NetPacketProcessor netPacketProcessor;
+    
+    private GameObject locationInstance;
+    private GameObject characterInstance;
 
     private void Start()
     {
@@ -18,23 +26,35 @@ public class ClientManager : MonoBehaviour
         listener.NetworkReceiveEvent += ListenerOnNetworkReceiveEvent;
         listener.PeerConnectedEvent += ListenerOnPeerConnectedEvent;
         listener.PeerDisconnectedEvent += ListenerOnPeerDisconnectedEvent;
-        listener.NetworkErrorEvent += ListenerOnNetworkErrorEvent;
         
         netManager = new NetManager(listener);
         netManager.Start();
         netManager.MaxConnectAttempts = 20;
         Debug.Log($"Try connecting to {address} : {port.ToString()}");
-        var netPeer = netManager.Connect(address, port, secretKey);
+
+        netPacketProcessor = new();
+        netPacketProcessor.RegisterNestedType<Vector2Serialize>();
+        netPacketProcessor.RegisterNestedType<Vector3Serialize>();
+        netPacketProcessor.SubscribeReusable<PrepareLocationNetworkCommand, NetPeer>(OnPrepareLocationCommand);
+        netPacketProcessor.SubscribeReusable<SpawnCharacterNetworkCommand, NetPeer>(OnSpawnCharacterCommand);
+        
+        netManager.Connect(address, port, secretKey);
+    }
+
+    private void OnSpawnCharacterCommand(SpawnCharacterNetworkCommand command, NetPeer netPeer)
+    {
+        characterInstance = Instantiate(characterPrefab, command.Position.AsVector, Quaternion.identity);
+    }
+
+    private void OnPrepareLocationCommand(PrepareLocationNetworkCommand command, NetPeer netPeer)
+    {
+        locationInstance = Instantiate(locationPrefab, Vector3.zero, Quaternion.identity);
+        locationInstance.transform.localScale = new Vector3(command.LocationScale.X, 1, command.LocationScale.Y);
     }
 
     private void Update()
     {
         netManager.PollEvents();
-    }
-
-    private void ListenerOnNetworkErrorEvent(IPEndPoint endpoint, SocketError socketerror)
-    {
-        Debug.Log("Network error"); 
     }
 
     private void ListenerOnPeerDisconnectedEvent(NetPeer peer, DisconnectInfo disconnectinfo)
@@ -49,7 +69,6 @@ public class ClientManager : MonoBehaviour
 
     private void ListenerOnNetworkReceiveEvent(NetPeer peer, NetPacketReader reader, DeliveryMethod deliverymethod)
     {
-        Debug.Log($"We got message from server : {reader.GetString(100)}");
-        reader.Recycle();
+        netPacketProcessor.ReadAllPackets(reader, peer);
     }
 }
